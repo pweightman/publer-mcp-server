@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { PublerApiError, PublerClient } from "./publer-client.js";
+import type { SimplePostInput } from "./publer-client.js";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -46,47 +47,116 @@ const accountIdsArg = z
   );
 
 const mediaArg = z
-  .array(
-    z.object({
-      id: z
-        .string()
-        .min(1)
-        .describe("Media id returned by publer_upload_media / a completed upload job."),
-      type: z
-        .string()
-        .optional()
-        .describe("image | video | document. Defaults to image."),
-      alt_text: z
-        .string()
-        .optional()
-        .describe("Accessibility alt text for the media."),
-    }),
-  )
+  .array(z.looseObject({ id: z.string().min(1) }))
   .optional()
   .describe(
-    "Media to attach, referenced by uploaded media id. Upload first with " +
-      "publer_upload_media or publer_upload_media_from_url.",
+    "Media items, referenced by uploaded media id (upload first with " +
+      "publer_upload_media / publer_upload_media_from_url). Each item is a " +
+      "media object passed through verbatim. Common fields: id (required), " +
+      "type (image|video|document|photo|gif), alt_text, path, thumbnail, " +
+      "name, caption, title; videos: thumbnails [{id,small,real}] and " +
+      "default_thumbnail (index). type defaults to image for photo/carousel " +
+      "posts and document for pdf.",
   );
 
 const contentTypeArg = z
-  .enum(["status", "photo", "video", "link", "carousel", "pdf"])
+  .string()
   .optional()
   .describe(
-    "Content type. Inferred when omitted: link if url is set, photo if " +
-      "media is attached, otherwise status. Set explicitly for video, " +
-      "carousel, or pdf.",
+    "Network block content type: status, photo, video, link, gif, poll, " +
+      "carousel, pdf, etc. Inferred when omitted: link if `link` is set, " +
+      "photo if media is attached, otherwise status.",
   );
 
-const urlArg = z
-  .string()
-  .url()
+const linkArg = z
+  .looseObject({ url: z.string().url() })
   .optional()
-  .describe("Link URL. Required for content_type=link.");
+  .describe(
+    "Link-preview metadata for link posts. Fields: url (required), title, " +
+      "description, images (string[]), default_image (index), " +
+      "call_to_action (e.g. LEARN_MORE, SIGN_UP), provider_display, " +
+      "phone_number. Use publer_extract_link_metadata to prefill these.",
+  );
+
+const extraArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Extra fields merged into every auto-built network block, for " +
+      "content-type-specific options. Examples: poll -> { options: " +
+      "[...], duration: 7, question: '...' }; reel/short/story -> " +
+      "{ details: { type: 'reel' } }; Google event/offer -> { title, url, " +
+      "details: { type: 'offer', start, end, coupon, terms } }; Facebook " +
+      "carousel -> { sublinks: [...] }; LinkedIn PDF -> { details: { type: " +
+      "'document' }, title }; Pinterest pin -> { url, title }.",
+  );
 
 const labelsArg = z
   .array(z.string())
   .optional()
   .describe("Labels applied to every selected account.");
+
+const signatureArg = z
+  .string()
+  .optional()
+  .describe(
+    "Signature id appended to every selected account (from " +
+      "publer_list_signatures).",
+  );
+
+const watermarkArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Watermark object applied to media for every selected account " +
+      "(full object from media options: id, name, opacity, size, " +
+      "position, image, default).",
+  );
+
+const locationArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Location object to tag on every selected account (from " +
+      "publer_search_locations): id, name, info, address, etc. " +
+      "Facebook Pages / Instagram Business / Threads only.",
+  );
+
+const shareArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Auto-share callback applied to every selected account: " +
+      "{ account_ids: [...], text, conditions: { relation: 'AND'|'OR', " +
+      "clauses: { age: { duration, unit }, engagements: { comparison, " +
+      "value }, reach: { comparison, value } } }, delay: { duration, unit } }.",
+  );
+
+const commentsArg = z
+  .array(z.record(z.string(), z.any()))
+  .optional()
+  .describe(
+    "Follow-up comments applied to every selected account. Each: " +
+      "{ text, language?, media?, conditions? } where conditions uses the " +
+      "same relation/clauses (age/engagements/reach) model as share.",
+  );
+
+const deleteArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Auto-delete/hide callback applied to every selected account: " +
+      "{ conditions: { clauses: { age: { duration, unit }, engagements: " +
+      "{ comparison, value } } }, hide: boolean }.",
+  );
+
+const accountExtraArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Extra fields merged into every selected account object, e.g. " +
+      "Pinterest { album_id }, or any other per-account field.",
+  );
 
 const networksArg = z
   .record(z.string(), z.any())
@@ -97,6 +167,67 @@ const networksArg = z
       "google, telegram, mastodon, threads, bluesky, wordpress_basic, " +
       "wordpress_oauth) for network-specific content. Bypasses auto-resolution.",
   );
+
+/** Shared network-block content args for the ergonomic post tools. */
+const contentShape = {
+  media: mediaArg,
+  content_type: contentTypeArg,
+  link: linkArg,
+  extra: extraArg,
+  networks: networksArg,
+};
+
+/** Shared per-account args for the ergonomic post tools. */
+const accountShape = {
+  labels: labelsArg,
+  signature: signatureArg,
+  watermark: watermarkArg,
+  location: locationArg,
+  share: shareArg,
+  comments: commentsArg,
+  delete: deleteArg,
+  account_extra: accountExtraArg,
+};
+
+type SharedPostArgs = {
+  text: string;
+  account_ids: string[];
+  media?: unknown[];
+  content_type?: string;
+  link?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+  networks?: Record<string, unknown>;
+  labels?: string[];
+  signature?: string;
+  watermark?: Record<string, unknown>;
+  location?: Record<string, unknown>;
+  share?: Record<string, unknown>;
+  comments?: Record<string, unknown>[];
+  delete?: Record<string, unknown>;
+  account_extra?: Record<string, unknown>;
+  scheduled_at?: string;
+};
+
+function mapPostInput(a: SharedPostArgs): SimplePostInput {
+  return {
+    text: a.text,
+    accountIds: a.account_ids,
+    media: a.media as SimplePostInput["media"],
+    contentType: a.content_type,
+    link: a.link as SimplePostInput["link"],
+    extra: a.extra,
+    networks: a.networks,
+    labels: a.labels,
+    signature: a.signature,
+    watermark: a.watermark,
+    location: a.location,
+    share: a.share,
+    comments: a.comments,
+    delete: a.delete,
+    accountExtra: a.account_extra,
+    scheduledAt: a.scheduled_at,
+  };
+}
 
 export function createServer(): McpServer {
   const config = loadConfig();
@@ -167,8 +298,9 @@ export function createServer(): McpServer {
     {
       title: "Schedule a Publer post",
       description:
-        "Schedule a post across one or more social accounts. Returns a job_id; " +
-        "poll publer_check_job_status until the job completes.",
+        "Schedule a post across one or more social accounts (any content " +
+        "type / platform format via content_type + media + link + extra). " +
+        "Returns a job_id; poll publer_check_job_status until complete.",
       inputSchema: {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
@@ -180,10 +312,8 @@ export function createServer(): McpServer {
               "every account. Required for a plain scheduled post; omit when " +
               "using auto-scheduling or recurring.",
           ),
-        media: mediaArg,
-        content_type: contentTypeArg,
-        url: urlArg,
-        labels: labelsArg,
+        ...contentShape,
+        ...accountShape,
         state: z
           .enum(["scheduled", "recurring"])
           .default("scheduled")
@@ -235,46 +365,31 @@ export function createServer(): McpServer {
             "Recurring config, e.g. { start_date, end_date, repeat, " +
               "days_of_week, repeat_rate }. Used with state=recurring.",
           ),
-        networks: networksArg,
         workspace_id: workspaceArg,
       },
     },
-    async ({
-      text,
-      account_ids,
-      scheduled_at,
-      media,
-      content_type,
-      url,
-      labels,
-      state,
-      auto,
-      range,
-      share_next,
-      recycling,
-      recurring,
-      networks,
-      workspace_id,
-    }) => {
+    async (args) => {
       try {
+        const a = args as unknown as SharedPostArgs & {
+          state: SimplePostInput extends never ? never : string;
+          auto?: boolean;
+          range?: Record<string, unknown>;
+          share_next?: boolean;
+          recycling?: Record<string, unknown>;
+          recurring?: Record<string, unknown>;
+          workspace_id?: string;
+        };
         const result = await client.createPosts(
-          state,
+          a.state as Parameters<typeof client.createPosts>[0],
           {
-            text,
-            accountIds: account_ids,
-            media,
-            scheduledAt: scheduled_at,
-            contentType: content_type,
-            url,
-            labels,
-            auto,
-            range,
-            shareNext: share_next,
-            recycling,
-            recurring,
-            networks,
+            ...mapPostInput(a),
+            auto: a.auto,
+            range: a.range,
+            shareNext: a.share_next,
+            recycling: a.recycling,
+            recurring: a.recurring,
           },
-          { workspaceId: workspace_id },
+          { workspaceId: a.workspace_id },
         );
         return ok(result);
       } catch (error) {
@@ -288,42 +403,26 @@ export function createServer(): McpServer {
     {
       title: "Publish a Publer post immediately",
       description:
-        "Publish a post immediately to one or more social accounts. Returns a " +
-        "job_id; poll publer_check_job_status until the job completes.",
+        "Publish a post immediately to one or more social accounts (any " +
+        "content type / platform format). Returns a job_id; poll " +
+        "publer_check_job_status until complete.",
       inputSchema: {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
-        media: mediaArg,
-        content_type: contentTypeArg,
-        url: urlArg,
-        labels: labelsArg,
-        networks: networksArg,
+        ...contentShape,
+        ...accountShape,
         workspace_id: workspaceArg,
       },
     },
-    async ({
-      text,
-      account_ids,
-      media,
-      content_type,
-      url,
-      labels,
-      networks,
-      workspace_id,
-    }) => {
+    async (args) => {
       try {
+        const a = args as unknown as SharedPostArgs & {
+          workspace_id?: string;
+        };
         const result = await client.createPosts(
           "scheduled",
-          {
-            text,
-            accountIds: account_ids,
-            media,
-            contentType: content_type,
-            url,
-            labels,
-            networks,
-          },
-          { publish: true, workspaceId: workspace_id },
+          mapPostInput(a),
+          { publish: true, workspaceId: a.workspace_id },
         );
         return ok(result);
       } catch (error) {
@@ -338,48 +437,31 @@ export function createServer(): McpServer {
       title: "Create a Publer draft post",
       description:
         "Save a draft post without publishing. Returns a job_id; poll " +
-        "publer_check_job_status until the job completes.",
+        "publer_check_job_status until complete.",
       inputSchema: {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
-        media: mediaArg,
-        content_type: contentTypeArg,
-        url: urlArg,
-        labels: labelsArg,
+        ...contentShape,
+        ...accountShape,
         visibility: z
           .enum(["public", "private"])
           .default("public")
           .describe(
             "public: visible to the workspace. private: only the creator.",
           ),
-        networks: networksArg,
         workspace_id: workspaceArg,
       },
     },
-    async ({
-      text,
-      account_ids,
-      media,
-      content_type,
-      url,
-      labels,
-      visibility,
-      networks,
-      workspace_id,
-    }) => {
+    async (args) => {
       try {
+        const a = args as unknown as SharedPostArgs & {
+          visibility: "public" | "private";
+          workspace_id?: string;
+        };
         const result = await client.createPosts(
-          visibility === "private" ? "draft_private" : "draft_public",
-          {
-            text,
-            accountIds: account_ids,
-            media,
-            contentType: content_type,
-            url,
-            labels,
-            networks,
-          },
-          { workspaceId: workspace_id },
+          a.visibility === "private" ? "draft_private" : "draft_public",
+          mapPostInput(a),
+          { workspaceId: a.workspace_id },
         );
         return ok(result);
       } catch (error) {
@@ -463,6 +545,176 @@ export function createServer(): McpServer {
     async ({ post_ids, workspace_id }) => {
       try {
         return ok(await client.deletePosts(post_ids, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_update_post",
+    {
+      title: "Update a Publer post",
+      description:
+        "Update an existing post by ID. For scheduled posts most fields can " +
+        "change; for already-published posts only network-specific fields " +
+        "(or just labels on some networks) are updatable. For recurring " +
+        "posts the change applies to all future child posts.",
+      inputSchema: {
+        post_id: z
+          .string()
+          .min(1)
+          .describe("ID of the post to update."),
+        post: z
+          .looseObject({
+            text: z.string().describe("The main post text (required)."),
+          })
+          .describe(
+            "Post fields to update, sent verbatim as { post: {...} }. " +
+              "Common: text (required), title; plus any network-specific or " +
+              "scheduling fields the API accepts.",
+          ),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ post_id, post, workspace_id }) => {
+      try {
+        return ok(
+          await client.updatePost(
+            post_id,
+            post as Record<string, unknown>,
+            workspace_id,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  // --- Discovery & metadata --------------------------------------------------
+
+  server.registerTool(
+    "publer_extract_link_metadata",
+    {
+      title: "Extract link preview metadata",
+      description:
+        "Fetch rich preview metadata (title, description, images, favicon) " +
+        "from a URL. Use the result to prefill the `link` argument of post " +
+        "tools for accurate link-post previews.",
+      inputSchema: {
+        url: z.string().url().describe("The URL to extract metadata from."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ url, workspace_id }) => {
+      try {
+        return ok(await client.extractLinkMetadata(url, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_list_signatures",
+    {
+      title: "List account signatures",
+      description:
+        "List signatures available for accounts in a workspace. Pass a " +
+        "signature id to a post tool's `signature` argument to append it.",
+      inputSchema: {
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe(
+            "Workspace ID (path param). Defaults to PUBLER_WORKSPACE_ID " +
+              "if omitted.",
+          )
+          .optional(),
+        account_ids: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Filter signatures to these account IDs."),
+      },
+    },
+    async ({ workspace_id, account_ids }) => {
+      try {
+        const ws = workspace_id ?? config.workspaceId;
+        if (!ws) {
+          throw new Error(
+            "workspace_id is required (or set PUBLER_WORKSPACE_ID).",
+          );
+        }
+        return ok(await client.listSignatures(ws, account_ids));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_media_options",
+    {
+      title: "Get media options (albums, boards, watermarks)",
+      description:
+        "List Facebook albums, Pinterest boards, and saved watermarks per " +
+        "account. Use album/board IDs in account_extra (e.g. album_id) and " +
+        "a watermark object in the `watermark` argument of post tools.",
+      inputSchema: {
+        workspace_id: z
+          .string()
+          .min(1)
+          .describe(
+            "Workspace ID (path param). Defaults to PUBLER_WORKSPACE_ID " +
+              "if omitted.",
+          )
+          .optional(),
+        account_ids: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Filter media options to these account IDs."),
+      },
+    },
+    async ({ workspace_id, account_ids }) => {
+      try {
+        const ws = workspace_id ?? config.workspaceId;
+        if (!ws) {
+          throw new Error(
+            "workspace_id is required (or set PUBLER_WORKSPACE_ID).",
+          );
+        }
+        return ok(await client.getMediaOptions(ws, account_ids));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_search_locations",
+    {
+      title: "Search locations to tag",
+      description:
+        "Search Facebook / Instagram / Threads locations by query. Pass a " +
+        "returned location object to the `location` argument of post tools " +
+        "(Facebook Pages, Instagram Business, Threads only).",
+      inputSchema: {
+        network: z
+          .enum(["facebook", "instagram", "threads"])
+          .describe("Which network's location index to search."),
+        query: z
+          .string()
+          .min(1)
+          .describe("Search query, e.g. a city or venue name."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ network, query, workspace_id }) => {
+      try {
+        return ok(
+          await client.searchLocations(network, query, workspace_id),
+        );
       } catch (error) {
         return fail(error);
       }
