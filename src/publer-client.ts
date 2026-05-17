@@ -67,7 +67,7 @@ export interface MediaFromUrlItem {
   source?: string;
 }
 
-type QueryValue = string | number | boolean | undefined;
+type QueryValue = string | number | boolean | string[] | undefined;
 
 interface RequestOptions {
   query?: Record<string, QueryValue>;
@@ -88,7 +88,15 @@ export class PublerClient {
     const url = new URL(this.config.baseUrl + path);
     if (options.query) {
       for (const [key, value] of Object.entries(options.query)) {
-        if (value !== undefined && value !== null && value !== "") {
+        if (value === undefined || value === null || value === "") {
+          continue;
+        }
+        if (Array.isArray(value)) {
+          // Rails-style array params: key[]=a&key[]=b
+          for (const item of value) {
+            url.searchParams.append(`${key}[]`, String(item));
+          }
+        } else {
           url.searchParams.set(key, String(value));
         }
       }
@@ -275,6 +283,17 @@ export class PublerClient {
     return this.request("POST", path, {
       body: { bulk },
       workspaceId: options.workspaceId,
+    });
+  }
+
+  /**
+   * Delete one or more posts of any state. Subject to Publer's role-based
+   * and state-specific authorization rules. Returns the deleted IDs.
+   */
+  deletePosts(postIds: string[], workspaceId?: string): Promise<unknown> {
+    return this.request("DELETE", "/posts", {
+      query: { post_ids: postIds },
+      workspaceId,
     });
   }
 

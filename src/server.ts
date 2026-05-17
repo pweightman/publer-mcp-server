@@ -416,6 +416,36 @@ export function createServer(): McpServer {
     },
   );
 
+  server.registerTool(
+    "publer_delete_posts",
+    {
+      title: "Delete Publer posts",
+      description:
+        "Permanently delete one or more posts of any state from the " +
+        "workspace. Irreversible. Subject to Publer's authorization rules: " +
+        "you can delete posts you created or posts in workspaces you own / " +
+        "have post-action access to; private drafts only by their creator; " +
+        "queued posts (except reminders) cannot be deleted. Returns the IDs " +
+        "that were actually deleted.",
+      inputSchema: {
+        post_ids: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe(
+            "Post IDs to delete (MongoDB ObjectIDs and/or PostgreSQL IDs).",
+          ),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ post_ids, workspace_id }) => {
+      try {
+        return ok(await client.deletePosts(post_ids, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
   // --- Media -----------------------------------------------------------------
 
   server.registerTool(

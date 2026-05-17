@@ -68,6 +68,7 @@ Then set `PUBLER_WORKSPACE_ID` (or pass `workspace_id` per call).
 | `publer_publish_post`      | Publish a post immediately (returns a `job_id`).                        |
 | `publer_create_draft`      | Save a draft post (returns a `job_id`).                                 |
 | `publer_create_posts_raw`  | Escape hatch: send a raw `bulk` payload for full API coverage.         |
+| `publer_delete_posts`      | Permanently delete posts by ID (irreversible).                         |
 | `publer_upload_media`      | Upload a local file directly (sync). Returns a media `id`.             |
 | `publer_upload_media_from_url` | Import media by URL (async, returns a `job_id`).                   |
 | `publer_check_job_status`  | Poll an async job (posts or URL media uploads) until it completes.     |
