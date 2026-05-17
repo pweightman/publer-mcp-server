@@ -26,8 +26,15 @@ export interface SimplePostInput {
   accountIds: string[];
   mediaUrls?: string[];
   scheduledAt?: string;
-  /** Advanced per-network overrides passed straight through to the Publer payload. */
+  /** Publer content type for the network block. Defaults to status, or photo when media is attached. */
+  type?: string;
+  /** Advanced: full per-network override map passed straight through, bypassing provider auto-resolution. */
   networks?: Record<string, unknown>;
+}
+
+interface PublerAccount {
+  id: string | number;
+  provider?: string;
 }
 
 type QueryValue = string | number | boolean | undefined;
@@ -132,36 +139,83 @@ export class PublerClient {
     );
   }
 
-  createPosts(
+  private async resolveAccountProviders(
+    accountIds: string[],
+    workspaceId?: string,
+  ): Promise<Map<string, string>> {
+    const raw = (await this.listAccounts(workspaceId)) as
+      | PublerAccount[]
+      | { accounts?: PublerAccount[] }
+      | null;
+
+    const accounts: PublerAccount[] = Array.isArray(raw)
+      ? raw
+      : (raw?.accounts ?? []);
+
+    const byId = new Map<string, string>();
+    for (const account of accounts) {
+      if (account?.id != null && account.provider) {
+        byId.set(String(account.id), String(account.provider));
+      }
+    }
+
+    const unresolved = accountIds.filter((id) => !byId.has(id));
+    if (unresolved.length > 0) {
+      const ws = workspaceId ?? this.config.workspaceId ?? "(default)";
+      throw new Error(
+        `Could not determine the social network for account id(s): ` +
+          `${unresolved.join(", ")}. Verify them with publer_list_accounts ` +
+          `and that they belong to workspace ${ws}.`,
+      );
+    }
+    return byId;
+  }
+
+  async createPosts(
     state: PostState,
     input: SimplePostInput,
     options: { publish?: boolean; workspaceId?: string } = {},
   ): Promise<unknown> {
-    const body = buildBulkBody(state, input);
+    let networks: Record<string, unknown>;
+    if (input.networks && Object.keys(input.networks).length > 0) {
+      networks = input.networks;
+    } else {
+      const providers = await this.resolveAccountProviders(
+        input.accountIds,
+        options.workspaceId,
+      );
+      const type =
+        input.type ??
+        (input.mediaUrls && input.mediaUrls.length > 0 ? "photo" : "status");
+      const media =
+        input.mediaUrls && input.mediaUrls.length > 0
+          ? input.mediaUrls.map((path) => ({ path }))
+          : undefined;
+
+      networks = {};
+      for (const provider of new Set(providers.values())) {
+        networks[provider] = {
+          type,
+          text: input.text,
+          ...(media ? { media } : {}),
+        };
+      }
+    }
+
+    const post: Record<string, unknown> = {
+      networks,
+      accounts: input.accountIds.map((id) => ({ id })),
+    };
+    if (input.scheduledAt) {
+      post.scheduled_at = input.scheduledAt;
+    }
+
     const path = options.publish
       ? "/posts/schedule/publish"
       : "/posts/schedule";
     return this.request("POST", path, {
-      body,
+      body: { bulk: { state, posts: [post] } },
       workspaceId: options.workspaceId,
     });
   }
-}
-
-export function buildBulkBody(state: PostState, input: SimplePostInput) {
-  const post: Record<string, unknown> = {
-    networks: input.networks ?? {},
-    accounts: input.accountIds.map((id) => ({ id })),
-    text: input.text,
-  };
-
-  if (input.mediaUrls && input.mediaUrls.length > 0) {
-    post.media = input.mediaUrls.map((path) => ({ path }));
-  }
-
-  if (input.scheduledAt) {
-    post.scheduled_at = input.scheduledAt;
-  }
-
-  return { bulk: { state, posts: [post] } };
 }
