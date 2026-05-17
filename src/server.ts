@@ -68,6 +68,36 @@ const mediaArg = z
       "publer_upload_media or publer_upload_media_from_url.",
   );
 
+const contentTypeArg = z
+  .enum(["status", "photo", "video", "link", "carousel", "pdf"])
+  .optional()
+  .describe(
+    "Content type. Inferred when omitted: link if url is set, photo if " +
+      "media is attached, otherwise status. Set explicitly for video, " +
+      "carousel, or pdf.",
+  );
+
+const urlArg = z
+  .string()
+  .url()
+  .optional()
+  .describe("Link URL. Required for content_type=link.");
+
+const labelsArg = z
+  .array(z.string())
+  .optional()
+  .describe("Labels applied to every selected account.");
+
+const networksArg = z
+  .record(z.string(), z.any())
+  .optional()
+  .describe(
+    "Advanced: full per-network override map keyed by provider " +
+      "(facebook, instagram, twitter, linkedin, pinterest, youtube, tiktok, " +
+      "google, telegram, mastodon, threads, bluesky, wordpress_basic, " +
+      "wordpress_oauth) for network-specific content. Bypasses auto-resolution.",
+  );
+
 export function createServer(): McpServer {
   const config = loadConfig();
   const client = new PublerClient(config);
@@ -144,22 +174,47 @@ export function createServer(): McpServer {
         account_ids: accountIdsArg,
         scheduled_at: z
           .string()
+          .optional()
           .describe(
-            "ISO 8601 timestamp for when to publish, e.g. 2026-06-01T09:00:00Z. " +
-              "Required for state=scheduled.",
+            "ISO 8601 publish time, e.g. 2026-06-01T09:00:00Z, applied to " +
+              "every account. Required for a plain scheduled post; omit when " +
+              "using auto-scheduling or recurring.",
           ),
         media: mediaArg,
+        content_type: contentTypeArg,
+        url: urlArg,
+        labels: labelsArg,
         state: z
-          .enum(["scheduled", "auto_scheduled", "recycled", "recurring"])
+          .enum(["scheduled", "recurring"])
           .default("scheduled")
-          .describe("Publishing method. Defaults to scheduled."),
-        networks: z
+          .describe(
+            "scheduled (specific time, or auto-scheduled with auto+range, or " +
+              "recycled with recycling) or recurring (repeating posts).",
+          ),
+        auto: z
+          .boolean()
+          .optional()
+          .describe("Enable AI auto-scheduling. Provide range with this."),
+        range: z
           .record(z.string(), z.any())
           .optional()
           .describe(
-            "Advanced: full per-network override map (e.g. keyed by provider " +
-              "for per-network customization). Bypasses the default block.",
+            "Auto-schedule window: { start_date, end_date } ISO timestamps.",
           ),
+        recycling: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe(
+            "Recycling config, e.g. { gap, gap_freq, expire_count, expire_date }.",
+          ),
+        recurring: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe(
+            "Recurring config, e.g. { start_date, end_date, repeat, " +
+              "days_of_week, repeat_rate }. Used with state=recurring.",
+          ),
+        networks: networksArg,
         workspace_id: workspaceArg,
       },
     },
@@ -168,7 +223,14 @@ export function createServer(): McpServer {
       account_ids,
       scheduled_at,
       media,
+      content_type,
+      url,
+      labels,
       state,
+      auto,
+      range,
+      recycling,
+      recurring,
       networks,
       workspace_id,
     }) => {
@@ -180,6 +242,13 @@ export function createServer(): McpServer {
             accountIds: account_ids,
             media,
             scheduledAt: scheduled_at,
+            contentType: content_type,
+            url,
+            labels,
+            auto,
+            range,
+            recycling,
+            recurring,
             networks,
           },
           { workspaceId: workspace_id },
@@ -202,16 +271,23 @@ export function createServer(): McpServer {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
         media: mediaArg,
-        networks: z
-          .record(z.string(), z.any())
-          .optional()
-          .describe(
-            "Advanced: full per-network override map. Bypasses the default block.",
-          ),
+        content_type: contentTypeArg,
+        url: urlArg,
+        labels: labelsArg,
+        networks: networksArg,
         workspace_id: workspaceArg,
       },
     },
-    async ({ text, account_ids, media, networks, workspace_id }) => {
+    async ({
+      text,
+      account_ids,
+      media,
+      content_type,
+      url,
+      labels,
+      networks,
+      workspace_id,
+    }) => {
       try {
         const result = await client.createPosts(
           "scheduled",
@@ -219,6 +295,9 @@ export function createServer(): McpServer {
             text,
             accountIds: account_ids,
             media,
+            contentType: content_type,
+            url,
+            labels,
             networks,
           },
           { publish: true, workspaceId: workspace_id },
@@ -241,16 +320,30 @@ export function createServer(): McpServer {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
         media: mediaArg,
+        content_type: contentTypeArg,
+        url: urlArg,
+        labels: labelsArg,
         visibility: z
           .enum(["public", "private"])
           .default("public")
           .describe(
             "public: visible to the workspace. private: only the creator.",
           ),
+        networks: networksArg,
         workspace_id: workspaceArg,
       },
     },
-    async ({ text, account_ids, media, visibility, workspace_id }) => {
+    async ({
+      text,
+      account_ids,
+      media,
+      content_type,
+      url,
+      labels,
+      visibility,
+      networks,
+      workspace_id,
+    }) => {
       try {
         const result = await client.createPosts(
           visibility === "private" ? "draft_private" : "draft_public",
@@ -258,10 +351,65 @@ export function createServer(): McpServer {
             text,
             accountIds: account_ids,
             media,
+            contentType: content_type,
+            url,
+            labels,
+            networks,
           },
           { workspaceId: workspace_id },
         );
         return ok(result);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_create_posts_raw",
+    {
+      title: "Create Publer posts from a raw bulk payload",
+      description:
+        "Escape hatch for the full Posts Create API. Send the `bulk` object " +
+        "verbatim ({ state, posts: [...] }). Use for multi-post batches, " +
+        "per-account share/comments/delete, network-specific content, " +
+        "recycling/recurring, or any field the ergonomic post tools omit. " +
+        "Returns a job_id; poll publer_check_job_status.",
+      inputSchema: {
+        bulk: z
+          .object({
+            state: z
+              .string()
+              .describe(
+                "scheduled, draft, draft_private, draft_public, or recurring.",
+              ),
+            posts: z
+              .array(z.record(z.string(), z.any()))
+              .min(1)
+              .describe(
+                "Array of post definitions (networks, accounts, and any " +
+                  "post-level options) exactly as the Publer API expects.",
+              ),
+          })
+          .describe("The bulk container sent verbatim to the API."),
+        publish: z
+          .boolean()
+          .default(false)
+          .describe(
+            "true -> POST /posts/schedule/publish (immediate); " +
+              "false -> POST /posts/schedule.",
+          ),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ bulk, publish, workspace_id }) => {
+      try {
+        return ok(
+          await client.createPostsRaw(bulk, {
+            publish,
+            workspaceId: workspace_id,
+          }),
+        );
       } catch (error) {
         return fail(error);
       }

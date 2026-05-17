@@ -64,13 +64,32 @@ Then set `PUBLER_WORKSPACE_ID` (or pass `workspace_id` per call).
 | `publer_get_current_user`  | Profile and settings of the authenticated user.                        |
 | `publer_list_workspaces`   | List accessible workspaces (call this first to get workspace IDs).     |
 | `publer_list_accounts`     | List connected social accounts in a workspace.                         |
-| `publer_schedule_post`     | Schedule a post (returns a `job_id`).                                   |
+| `publer_schedule_post`     | Schedule a post: specific time, auto-schedule, recycling, or recurring.|
 | `publer_publish_post`      | Publish a post immediately (returns a `job_id`).                        |
 | `publer_create_draft`      | Save a draft post (returns a `job_id`).                                 |
+| `publer_create_posts_raw`  | Escape hatch: send a raw `bulk` payload for full API coverage.         |
 | `publer_upload_media`      | Upload a local file directly (sync). Returns a media `id`.             |
 | `publer_upload_media_from_url` | Import media by URL (async, returns a `job_id`).                   |
 | `publer_check_job_status`  | Poll an async job (posts or URL media uploads) until it completes.     |
 | `publer_get_post_insights` | Performance analytics for a social account's posts.                    |
+
+### Posts: content & publishing
+
+The ergonomic post tools (`schedule_post`, `publish_post`, `create_draft`)
+build the `bulk` payload for you:
+
+- `content_type`: `status` (text only), `photo`/`video`/`carousel`/`pdf`
+  (with `media`), or `link` (with `url`). Inferred when omitted.
+- The `networks` block is keyed automatically by each selected account's
+  provider (resolved via the accounts endpoint). Pass the advanced `networks`
+  argument to send fully custom per-network content instead.
+- `scheduled_at` is applied inside every selected account.
+- `schedule_post` also exposes `auto` + `range` (auto-scheduling),
+  `recycling`, and `recurring` (with `state: recurring`).
+
+For anything not covered — multi-post batches, per-account `share`/`comments`/
+`delete`, mixed network-specific content — use **`publer_create_posts_raw`**
+and pass the `bulk` object exactly as the Publer API documents it.
 
 ### Attaching media to posts
 

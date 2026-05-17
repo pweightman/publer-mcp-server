@@ -38,11 +38,26 @@ export interface SimplePostInput {
   text: string;
   accountIds: string[];
   media?: MediaRef[];
+  /** ISO 8601 timestamp, applied inside every selected account object. */
   scheduledAt?: string;
-  /** Publer content type for the network block. Defaults to status, or photo when media is attached. */
-  type?: string;
-  /** Advanced: full per-network override map passed straight through. Bypasses the default network block. */
+  /** Labels applied to every selected account object. */
+  labels?: string[];
+  /** status | photo | video | link | carousel | pdf. Inferred when omitted. */
+  contentType?: string;
+  /** Required for link posts. */
+  url?: string;
+  /** Advanced: full per-network override map passed straight through. Bypasses provider auto-resolution. */
   networks?: Record<string, unknown>;
+  /** Post-level publishing options passed straight through. */
+  auto?: boolean;
+  range?: Record<string, unknown>;
+  recycling?: Record<string, unknown>;
+  recurring?: Record<string, unknown>;
+}
+
+interface PublerAccount {
+  id: string | number;
+  provider?: string;
 }
 
 export interface MediaFromUrlItem {
@@ -153,44 +168,112 @@ export class PublerClient {
     );
   }
 
+  private async resolveAccountProviders(
+    accountIds: string[],
+    workspaceId?: string,
+  ): Promise<Map<string, string>> {
+    const raw = (await this.listAccounts(workspaceId)) as
+      | PublerAccount[]
+      | { accounts?: PublerAccount[] }
+      | null;
+    const accounts: PublerAccount[] = Array.isArray(raw)
+      ? raw
+      : (raw?.accounts ?? []);
+
+    const byId = new Map<string, string>();
+    for (const account of accounts) {
+      if (account?.id != null && account.provider) {
+        byId.set(String(account.id), String(account.provider));
+      }
+    }
+
+    const unresolved = accountIds.filter((id) => !byId.has(id));
+    if (unresolved.length > 0) {
+      const ws = workspaceId ?? this.config.workspaceId ?? "(default)";
+      throw new Error(
+        `Could not determine the social network for account id(s): ` +
+          `${unresolved.join(", ")}. Verify them with publer_list_accounts ` +
+          `and that they belong to workspace ${ws}.`,
+      );
+    }
+    return byId;
+  }
+
   async createPosts(
     state: PostState,
     input: SimplePostInput,
     options: { publish?: boolean; workspaceId?: string } = {},
   ): Promise<unknown> {
+    const hasMedia = !!input.media && input.media.length > 0;
+    const contentType =
+      input.contentType ??
+      (input.url ? "link" : hasMedia ? "photo" : "status");
+
+    const block: Record<string, unknown> = {
+      type: contentType,
+      text: input.text,
+    };
+    if (input.url) {
+      block.url = input.url;
+    }
+    if (hasMedia) {
+      block.media = input.media!.map((m) => ({
+        id: m.id,
+        type: m.type ?? "image",
+        ...(m.alt_text ? { alt_text: m.alt_text } : {}),
+      }));
+    }
+
     let networks: Record<string, unknown>;
     if (input.networks && Object.keys(input.networks).length > 0) {
       networks = input.networks;
     } else {
-      const hasMedia = !!input.media && input.media.length > 0;
-      const block: Record<string, unknown> = {
-        type: input.type ?? (hasMedia ? "photo" : "status"),
-        text: input.text,
-      };
-      if (hasMedia) {
-        block.media = input.media!.map((m) => ({
-          id: m.id,
-          type: m.type ?? "image",
-          ...(m.alt_text ? { alt_text: m.alt_text } : {}),
-        }));
+      const providers = await this.resolveAccountProviders(
+        input.accountIds,
+        options.workspaceId,
+      );
+      networks = {};
+      for (const provider of new Set(providers.values())) {
+        networks[provider] = block;
       }
-      // "default" applies the same content to every selected account/network.
-      networks = { default: block };
     }
+
+    const account = (id: string): Record<string, unknown> => ({
+      id,
+      ...(input.scheduledAt ? { scheduled_at: input.scheduledAt } : {}),
+      ...(input.labels ? { labels: input.labels } : {}),
+    });
 
     const post: Record<string, unknown> = {
       networks,
-      accounts: input.accountIds.map((id) => ({ id })),
+      accounts: input.accountIds.map(account),
     };
-    if (input.scheduledAt) {
-      post.scheduled_at = input.scheduledAt;
-    }
+    if (input.auto !== undefined) post.auto = input.auto;
+    if (input.range) post.range = input.range;
+    if (input.recycling) post.recycling = input.recycling;
+    if (input.recurring) post.recurring = input.recurring;
 
+    return this.createPostsRaw(
+      { state, posts: [post] },
+      options,
+    );
+  }
+
+  /**
+   * Send a fully-formed `bulk` payload verbatim. Use this for advanced
+   * features (multi-post batches, per-account share/comments/delete,
+   * network-specific content, recycling/recurring) not covered by the
+   * ergonomic post tools.
+   */
+  createPostsRaw(
+    bulk: Record<string, unknown>,
+    options: { publish?: boolean; workspaceId?: string } = {},
+  ): Promise<unknown> {
     const path = options.publish
       ? "/posts/schedule/publish"
       : "/posts/schedule";
     return this.request("POST", path, {
-      body: { bulk: { state, posts: [post] } },
+      body: { bulk },
       workspaceId: options.workspaceId,
     });
   }
