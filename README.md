@@ -67,8 +67,20 @@ Then set `PUBLER_WORKSPACE_ID` (or pass `workspace_id` per call).
 | `publer_schedule_post`     | Schedule a post (returns a `job_id`).                                   |
 | `publer_publish_post`      | Publish a post immediately (returns a `job_id`).                        |
 | `publer_create_draft`      | Save a draft post (returns a `job_id`).                                 |
-| `publer_check_job_status`  | Poll an async post job until it completes.                             |
+| `publer_upload_media`      | Upload a local file directly (sync). Returns a media `id`.             |
+| `publer_upload_media_from_url` | Import media by URL (async, returns a `job_id`).                   |
+| `publer_check_job_status`  | Poll an async job (posts or URL media uploads) until it completes.     |
 | `publer_get_post_insights` | Performance analytics for a social account's posts.                    |
+
+### Attaching media to posts
+
+Media must be uploaded to Publer first, then referenced by id:
+
+1. `publer_upload_media` (local file, returns the media object with `id`
+   immediately), or `publer_upload_media_from_url` (returns a `job_id`; poll
+   `publer_check_job_status` to get the resulting media).
+2. Pass the id(s) to a post tool's `media` argument, e.g.
+   `media: [{ "id": "<media id>", "type": "image", "alt_text": "..." }]`.
 
 ### Async post flow
 

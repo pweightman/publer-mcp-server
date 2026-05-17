@@ -45,10 +45,28 @@ const accountIdsArg = z
     "Publer social account IDs to post to. Discover them with publer_list_accounts.",
   );
 
-const mediaUrlsArg = z
-  .array(z.string().url())
+const mediaArg = z
+  .array(
+    z.object({
+      id: z
+        .string()
+        .min(1)
+        .describe("Media id returned by publer_upload_media / a completed upload job."),
+      type: z
+        .string()
+        .optional()
+        .describe("image | video | document. Defaults to image."),
+      alt_text: z
+        .string()
+        .optional()
+        .describe("Accessibility alt text for the media."),
+    }),
+  )
   .optional()
-  .describe("Optional list of publicly accessible media URLs to attach.");
+  .describe(
+    "Media to attach, referenced by uploaded media id. Upload first with " +
+      "publer_upload_media or publer_upload_media_from_url.",
+  );
 
 export function createServer(): McpServer {
   const config = loadConfig();
@@ -130,7 +148,7 @@ export function createServer(): McpServer {
             "ISO 8601 timestamp for when to publish, e.g. 2026-06-01T09:00:00Z. " +
               "Required for state=scheduled.",
           ),
-        media_urls: mediaUrlsArg,
+        media: mediaArg,
         state: z
           .enum(["scheduled", "auto_scheduled", "recycled", "recurring"])
           .default("scheduled")
@@ -139,8 +157,8 @@ export function createServer(): McpServer {
           .record(z.string(), z.any())
           .optional()
           .describe(
-            "Advanced: per-network content overrides passed straight through " +
-              "to the Publer payload (keyed by provider).",
+            "Advanced: full per-network override map (e.g. keyed by provider " +
+              "for per-network customization). Bypasses the default block.",
           ),
         workspace_id: workspaceArg,
       },
@@ -149,7 +167,7 @@ export function createServer(): McpServer {
       text,
       account_ids,
       scheduled_at,
-      media_urls,
+      media,
       state,
       networks,
       workspace_id,
@@ -160,7 +178,7 @@ export function createServer(): McpServer {
           {
             text,
             accountIds: account_ids,
-            mediaUrls: media_urls,
+            media,
             scheduledAt: scheduled_at,
             networks,
           },
@@ -183,24 +201,24 @@ export function createServer(): McpServer {
       inputSchema: {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
-        media_urls: mediaUrlsArg,
+        media: mediaArg,
         networks: z
           .record(z.string(), z.any())
           .optional()
           .describe(
-            "Advanced: per-network content overrides keyed by provider.",
+            "Advanced: full per-network override map. Bypasses the default block.",
           ),
         workspace_id: workspaceArg,
       },
     },
-    async ({ text, account_ids, media_urls, networks, workspace_id }) => {
+    async ({ text, account_ids, media, networks, workspace_id }) => {
       try {
         const result = await client.createPosts(
           "scheduled",
           {
             text,
             accountIds: account_ids,
-            mediaUrls: media_urls,
+            media,
             networks,
           },
           { publish: true, workspaceId: workspace_id },
@@ -222,7 +240,7 @@ export function createServer(): McpServer {
       inputSchema: {
         text: z.string().min(1).describe("The post body / caption text."),
         account_ids: accountIdsArg,
-        media_urls: mediaUrlsArg,
+        media: mediaArg,
         visibility: z
           .enum(["public", "private"])
           .default("public")
@@ -232,18 +250,118 @@ export function createServer(): McpServer {
         workspace_id: workspaceArg,
       },
     },
-    async ({ text, account_ids, media_urls, visibility, workspace_id }) => {
+    async ({ text, account_ids, media, visibility, workspace_id }) => {
       try {
         const result = await client.createPosts(
           visibility === "private" ? "draft_private" : "draft_public",
           {
             text,
             accountIds: account_ids,
-            mediaUrls: media_urls,
+            media,
           },
           { workspaceId: workspace_id },
         );
         return ok(result);
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  // --- Media -----------------------------------------------------------------
+
+  server.registerTool(
+    "publer_upload_media",
+    {
+      title: "Upload a media file to Publer",
+      description:
+        "Upload a local media file (image, video, or document) directly. " +
+        "Synchronous; returns the media object including the `id` to pass in " +
+        "the `media` argument of post tools. Max 200MB; use " +
+        "publer_upload_media_from_url for larger files.",
+      inputSchema: {
+        file_path: z
+          .string()
+          .min(1)
+          .describe("Absolute path to the local file to upload."),
+        direct_upload: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Upload to Publer's S3 (slower, required if you need the final media URL).",
+          ),
+        in_library: z
+          .boolean()
+          .default(false)
+          .describe("Save the file to the workspace media library."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ file_path, direct_upload, in_library, workspace_id }) => {
+      try {
+        return ok(
+          await client.uploadMediaFile(file_path, {
+            directUpload: direct_upload,
+            inLibrary: in_library,
+            workspaceId: workspace_id,
+          }),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_upload_media_from_url",
+    {
+      title: "Import media into Publer from URLs",
+      description:
+        "Import one or more media files by URL. Asynchronous: returns a " +
+        "job_id; poll publer_check_job_status until complete to get the " +
+        "resulting media.",
+      inputSchema: {
+        media: z
+          .array(
+            z.object({
+              url: z.string().url().describe("URL of the media file."),
+              name: z.string().min(1).describe("Custom name for the media."),
+              caption: z.string().optional().describe("Optional caption."),
+              source: z
+                .string()
+                .optional()
+                .describe("Optional source attribution."),
+            }),
+          )
+          .min(1)
+          .describe("Media items to import by URL."),
+        type: z
+          .string()
+          .default("single")
+          .describe("Upload type: single or bulk."),
+        direct_upload: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Upload to Publer's S3 (slower, required if you need the final media URL).",
+          ),
+        in_library: z
+          .boolean()
+          .default(false)
+          .describe("Save the files to the workspace media library."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ media, type, direct_upload, in_library, workspace_id }) => {
+      try {
+        return ok(
+          await client.uploadMediaFromUrl(media, {
+            type,
+            directUpload: direct_upload,
+            inLibrary: in_library,
+            workspaceId: workspace_id,
+          }),
+        );
       } catch (error) {
         return fail(error);
       }
@@ -257,9 +375,9 @@ export function createServer(): McpServer {
     {
       title: "Check a Publer job status",
       description:
-        "Poll the status of an asynchronous post job. Post-creation tools " +
-        "return a job_id; call this until status is complete to see successes " +
-        "and failures.",
+        "Poll the status of an asynchronous job. Post-creation tools and " +
+        "publer_upload_media_from_url return a job_id; call this until status " +
+        "is complete to see successes and failures.",
       inputSchema: {
         job_id: z
           .string()
