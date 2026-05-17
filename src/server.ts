@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { loadConfig } from "./config.js";
 import { PublerApiError, PublerClient } from "./publer-client.js";
-import type { SimplePostInput } from "./publer-client.js";
+import type { SimplePostInput, QueryValue } from "./publer-client.js";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -592,6 +592,136 @@ export function createServer(): McpServer {
     },
   );
 
+  server.registerTool(
+    "publer_list_posts",
+    {
+      title: "List Publer posts",
+      description:
+        "List and filter posts across connected accounts (paginated). Use " +
+        "this to find post IDs for publer_update_post / publer_delete_posts.",
+      inputSchema: {
+        state: z
+          .string()
+          .optional()
+          .describe(
+            "Filter by a single post state, e.g. all, scheduled, " +
+              "scheduled_pending, published, published_posted, draft, " +
+              "draft_private, failed, recurring.",
+          ),
+        states: z
+          .array(z.string())
+          .optional()
+          .describe("Filter by multiple states (sent as state[])."),
+        from: z
+          .string()
+          .optional()
+          .describe("ISO date — posts on/after (requires to)."),
+        to: z
+          .string()
+          .optional()
+          .describe("ISO date — posts on/before (requires from)."),
+        page: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Page number (default 0)."),
+        account_ids: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Filter by these account IDs."),
+        query: z
+          .string()
+          .optional()
+          .describe("Full-text search in post content."),
+        post_type: z
+          .string()
+          .optional()
+          .describe("Filter by post type (photo, video, link, …)."),
+        member_id: z
+          .string()
+          .optional()
+          .describe("Filter by the workspace member who created the post."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({
+      states,
+      post_type,
+      account_ids,
+      workspace_id,
+      ...rest
+    }) => {
+      try {
+        // request() appends [] to array values, so pass base key names.
+        const q: Record<string, QueryValue> = {
+          ...rest,
+          postType: post_type,
+        };
+        if (account_ids) q.account_ids = account_ids;
+        if (states) q.state = states;
+        return ok(await client.listPosts(q, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_list_media",
+    {
+      title: "List Publer media library",
+      description:
+        "List and filter media library items (paginated). Returns ids " +
+        "usable in post tools' media argument.",
+      inputSchema: {
+        ids: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Specific media IDs (other filters ignored when set)."),
+        types: z
+          .array(z.enum(["photo", "video", "gif"]))
+          .optional()
+          .describe("Media type filter — photo, video, gif."),
+        used: z
+          .array(z.boolean())
+          .optional()
+          .describe("Filter by usage status."),
+        source: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Source — canva, vista, postnitro, contentdrips, openai, " +
+              "favorites, upload.",
+          ),
+        page: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Page number (0-based, default 0)."),
+        search: z
+          .string()
+          .optional()
+          .describe("Full-text search on name or caption."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ ids, types, used, source, page, search, workspace_id }) => {
+      try {
+        // request() appends [] to array values, so pass base key names.
+        const q: Record<string, QueryValue> = { page, search };
+        if (ids) q.ids = ids;
+        if (types) q.types = types;
+        if (used) q.used = used.map(String);
+        if (source) q.source = source;
+        return ok(await client.listMedia(q, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
   // --- Discovery & metadata --------------------------------------------------
 
   server.registerTool(
@@ -850,69 +980,356 @@ export function createServer(): McpServer {
 
   // --- Analytics -------------------------------------------------------------
 
+  const fromArg = z
+    .string()
+    .describe("Start date (YYYY-MM-DD, inclusive).");
+  const toArg = z.string().describe("End date (YYYY-MM-DD, inclusive).");
+  const sortTypeArg = z
+    .enum(["ASC", "DESC", "asc", "desc"])
+    .optional()
+    .describe("Sort direction (default DESC).");
+  const optionalAccountIdArg = z
+    .string()
+    .optional()
+    .describe(
+      "Social account ID. Omit to aggregate across all accessible accounts.",
+    );
+
   server.registerTool(
     "publer_get_post_insights",
     {
       title: "Get Publer post insights",
       description:
-        "Retrieve performance analytics for published posts of a social " +
-        "account, with filtering, sorting and pagination.",
+        "Per-post performance analytics for published posts, with filtering, " +
+        "sorting and pagination (10 posts/page).",
       inputSchema: {
-        account_id: z
-          .string()
-          .min(1)
-          .describe("The social account ID to fetch post insights for."),
-        from: z
-          .string()
-          .optional()
-          .describe("Start date (YYYY-MM-DD) inclusive."),
-        to: z
-          .string()
-          .optional()
-          .describe("End date (YYYY-MM-DD) inclusive."),
+        account_id: optionalAccountIdArg,
+        from: fromArg,
+        to: toArg,
         post_type: z
           .string()
           .optional()
           .describe(
-            "Filter by post type, e.g. photo, video, reel, carousel, link, " +
-              "status, story, short, document, article, poll.",
+            "Filter by post type (photo, video, reel, carousel, link, " +
+              "status, story, short, document, article, poll).",
           ),
         query: z
           .string()
           .optional()
-          .describe("Free-text search across post content."),
-        labels: z
-          .string()
-          .optional()
-          .describe("Comma-separated label filter."),
-        sort: z
+          .describe("Search across post text, title, link description."),
+        sort_by: z
           .string()
           .optional()
           .describe(
-            "Sort field, e.g. scheduled_at, reach, engagement, " +
-              "engagement_rate, likes, comments, shares, saves, link_clicks.",
+            "scheduled_at, reach, engagement, engagement_rate, likes, " +
+              "comments, shares, saves, etc.",
           ),
+        sort_type: sortTypeArg,
         page: z
           .number()
           .int()
           .min(0)
           .optional()
-          .describe("0-based page index. Each page returns 10 posts."),
-        competitors: z
-          .boolean()
+          .describe("0-based page index (10 posts per page)."),
+        member_id: z
+          .string()
           .optional()
-          .describe("Set true to enable competitor mode."),
+          .describe("Filter by the workspace member who created the post."),
+        competitors: z
+          .string()
+          .optional()
+          .describe("'true' to enable competitor insights."),
         competitor_id: z
           .string()
           .optional()
-          .describe("Narrow competitor mode to a single competitor."),
+          .describe("Competitor account ID (requires competitors=true)."),
         workspace_id: workspaceArg,
       },
     },
-    async ({ account_id, workspace_id, ...filters }) => {
+    async ({ account_id, workspace_id, post_type, ...rest }) => {
       try {
         return ok(
-          await client.getPostInsights(account_id, filters, workspace_id),
+          await client.getPostInsights(
+            { ...rest, postType: post_type },
+            account_id,
+            workspace_id,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_list_charts",
+    {
+      title: "List Publer analytics charts",
+      description:
+        "List available analytics charts grouped by growth, insights and " +
+        "demographics. Use the returned chart ids with publer_get_chart_data.",
+      inputSchema: {
+        account_type: z
+          .string()
+          .optional()
+          .describe(
+            "Filter charts for an account type, e.g. ig_business, fb_page, " +
+              "twitter, linkedin, youtube, tiktok, google, threads, bluesky.",
+          ),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_type, workspace_id }) => {
+      try {
+        return ok(await client.listCharts(account_type, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_chart_data",
+    {
+      title: "Get Publer chart data",
+      description:
+        "Fetch time-series data for one or more charts (current vs previous " +
+        "period). Get chart ids from publer_list_charts.",
+      inputSchema: {
+        chart_ids: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe("Chart IDs from publer_list_charts."),
+        account_id: optionalAccountIdArg,
+        from: z.string().optional().describe("Start date (YYYY-MM-DD)."),
+        to: z.string().optional().describe("End date (YYYY-MM-DD)."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ chart_ids, account_id, from, to, workspace_id }) => {
+      try {
+        return ok(
+          await client.getChartData(
+            { chart_ids, from, to },
+            account_id,
+            workspace_id,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_hashtag_insights",
+    {
+      title: "Get Publer hashtag insights",
+      description:
+        "Aggregated analytics per hashtag (with up to 3 recent posts each " +
+        "and a performance score), paginated 10/page.",
+      inputSchema: {
+        account_id: optionalAccountIdArg,
+        from: z.string().optional().describe("Start date (YYYY-MM-DD)."),
+        to: z.string().optional().describe("End date (YYYY-MM-DD)."),
+        sort_by: z
+          .string()
+          .optional()
+          .describe("posts, reach, likes, comments, shares, video_views."),
+        sort_type: sortTypeArg,
+        page: z.number().int().min(0).optional().describe("0-based page."),
+        query: z
+          .string()
+          .optional()
+          .describe("Case-insensitive hashtag filter."),
+        member_id: z.string().optional().describe("Filter by post author."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_id, workspace_id, ...query }) => {
+      try {
+        return ok(
+          await client.getHashtagInsights(query, account_id, workspace_id),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_hashtag_performing_posts",
+    {
+      title: "Get Publer hashtag performing posts",
+      description:
+        "Up to 6 top-performing posts that used a specific hashtag, with " +
+        "full per-post analytics.",
+      inputSchema: {
+        hashtag: z
+          .string()
+          .min(1)
+          .describe("Hashtag to analyse (include the #)."),
+        account_id: optionalAccountIdArg,
+        from: z.string().optional().describe("Start date (YYYY-MM-DD)."),
+        to: z.string().optional().describe("End date (YYYY-MM-DD)."),
+        sort_by: z
+          .string()
+          .optional()
+          .describe("scheduled_at, reach, engagement, engagement_rate, likes."),
+        sort_type: sortTypeArg,
+        member_id: z.string().optional().describe("Filter by post author."),
+        query: z
+          .string()
+          .optional()
+          .describe("Text search in post text / title / link info."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_id, workspace_id, ...query }) => {
+      try {
+        return ok(
+          await client.getHashtagPerformingPosts(
+            query,
+            account_id,
+            workspace_id,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_best_times",
+    {
+      title: "Get Publer best times to post",
+      description:
+        "Day/hour heatmap (Monday..Sunday, 24 relative scores each) of " +
+        "optimal posting times for an account.",
+      inputSchema: {
+        account_id: optionalAccountIdArg,
+        from: fromArg,
+        to: toArg,
+        competitors: z
+          .string()
+          .optional()
+          .describe("'true' to include competitor data."),
+        competitor_id: z
+          .string()
+          .optional()
+          .describe("Specific competitor (requires competitors=true)."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_id, workspace_id, ...query }) => {
+      try {
+        return ok(
+          await client.getBestTimes(query, account_id, workspace_id),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_members_analytics",
+    {
+      title: "Get Publer members analytics",
+      description:
+        "Posting activity and engagement per workspace member within a " +
+        "required date range.",
+      inputSchema: {
+        from: fromArg,
+        to: toArg,
+        account_id: z
+          .string()
+          .optional()
+          .describe("Restrict analytics to one social account."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ from, to, account_id, workspace_id }) => {
+      try {
+        return ok(
+          await client.getMembersAnalytics(
+            { from, to, account_id },
+            workspace_id,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_list_competitors",
+    {
+      title: "List Publer competitors",
+      description:
+        "List competitor accounts for the workspace, optionally scoped to a " +
+        "social account.",
+      inputSchema: {
+        account_id: z
+          .string()
+          .optional()
+          .describe("Social account ID to scope competitors."),
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_id, workspace_id }) => {
+      try {
+        return ok(await client.listCompetitors(account_id, workspace_id));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "publer_get_competitor_analytics",
+    {
+      title: "Get Publer competitor analytics",
+      description:
+        "Paginated competitor analytics (followers, growth, engagement, " +
+        "reach, posting mix) with filtering and sorting.",
+      inputSchema: {
+        account_id: z
+          .string()
+          .optional()
+          .describe("Scope analytics to one social account."),
+        competitor_id: z
+          .string()
+          .optional()
+          .describe("Analyse a specific competitor."),
+        query: z
+          .string()
+          .optional()
+          .describe("Case-insensitive search by competitor name."),
+        from: z.string().optional().describe("Start date (YYYY-MM-DD)."),
+        to: z.string().optional().describe("End date (YYYY-MM-DD)."),
+        page: z.number().int().min(0).optional().describe("0-based page."),
+        sort_by: z
+          .string()
+          .optional()
+          .describe(
+            "followers, reach, engagement, posts_count, videos_count, " +
+              "photos_count, links_count, statuses_count.",
+          ),
+        sort_type: sortTypeArg,
+        workspace_id: workspaceArg,
+      },
+    },
+    async ({ account_id, workspace_id, ...query }) => {
+      try {
+        return ok(
+          await client.getCompetitorAnalytics(
+            query,
+            account_id,
+            workspace_id,
+          ),
         );
       } catch (error) {
         return fail(error);

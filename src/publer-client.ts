@@ -111,7 +111,7 @@ export interface MediaFromUrlItem {
   source?: string;
 }
 
-type QueryValue = string | number | boolean | string[] | undefined;
+export type QueryValue = string | number | boolean | string[] | undefined;
 
 interface RequestOptions {
   query?: Record<string, QueryValue>;
@@ -221,16 +221,122 @@ export class PublerClient {
     );
   }
 
-  getPostInsights(
-    accountId: string,
+  /** Build `/analytics/{id}/{suffix}` or `/analytics/{suffix}` when id is omitted. */
+  private analyticsPath(suffix: string, accountId?: string): string {
+    return accountId
+      ? `/analytics/${encodeURIComponent(accountId)}/${suffix}`
+      : `/analytics/${suffix}`;
+  }
+
+  listPosts(
     query: Record<string, QueryValue>,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request("GET", "/posts", { query, workspaceId });
+  }
+
+  listMedia(
+    query: Record<string, QueryValue>,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request("GET", "/media", { query, workspaceId });
+  }
+
+  listCharts(
+    accountType?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request("GET", "/analytics/charts", {
+      query: accountType ? { account_type: accountType } : undefined,
+      workspaceId,
+    });
+  }
+
+  getChartData(
+    query: Record<string, QueryValue>,
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request("GET", this.analyticsPath("chart_data", accountId), {
+      query,
+      workspaceId,
+    });
+  }
+
+  getPostInsights(
+    query: Record<string, QueryValue>,
+    accountId?: string,
     workspaceId?: string,
   ): Promise<unknown> {
     return this.request(
       "GET",
-      `/analytics/${encodeURIComponent(accountId)}/post_insights`,
+      this.analyticsPath("post_insights", accountId),
       { query, workspaceId },
     );
+  }
+
+  getHashtagInsights(
+    query: Record<string, QueryValue>,
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request(
+      "GET",
+      this.analyticsPath("hashtag_insights", accountId),
+      { query, workspaceId },
+    );
+  }
+
+  getHashtagPerformingPosts(
+    query: Record<string, QueryValue>,
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request(
+      "GET",
+      this.analyticsPath("hashtag_performing_posts", accountId),
+      { query, workspaceId },
+    );
+  }
+
+  getBestTimes(
+    query: Record<string, QueryValue>,
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request(
+      "GET",
+      this.analyticsPath("best_times", accountId),
+      { query, workspaceId },
+    );
+  }
+
+  getMembersAnalytics(
+    query: Record<string, QueryValue>,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    return this.request("GET", "/analytics/members", { query, workspaceId });
+  }
+
+  listCompetitors(
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    const path = accountId
+      ? `/competitors/${encodeURIComponent(accountId)}`
+      : "/competitors";
+    return this.request("GET", path, { workspaceId });
+  }
+
+  getCompetitorAnalytics(
+    query: Record<string, QueryValue>,
+    accountId?: string,
+    workspaceId?: string,
+  ): Promise<unknown> {
+    const path = accountId
+      ? `/competitors/${encodeURIComponent(accountId)}/analytics`
+      : "/competitors/analytics";
+    return this.request("GET", path, { query, workspaceId });
   }
 
   private async resolveAccountProviders(

@@ -5,9 +5,11 @@ exposes the [Publer](https://publer.com) social media management API as tools
 for MCP clients such as Claude Desktop, Claude Code, and the Claude Agent SDK.
 
 It covers accounts/workspaces, the full Posts Create surface (every documented
-content type and platform format), post update/delete, media upload, link
-metadata extraction, signatures, watermarks/albums, location search, async job
-polling, and analytics — **17 tools** in total.
+content type and platform format), post/media listing, post update/delete,
+media upload, link metadata extraction, signatures, watermarks/albums,
+location search, async job polling, and the full analytics suite (charts,
+post insights, hashtags, best times, members, competitors) — **27 tools**
+covering every endpoint in the Publer API v1 specification.
 
 ---
 
@@ -195,10 +197,12 @@ returns `{ data: { job_id } }` — poll `publer_check_job_status` until done.
 | `publish`      | boolean | `true` → `/posts/schedule/publish`; `false` → `/posts/schedule` (default). |
 | `workspace_id` | string  | Workspace override.                                          |
 
-### Managing posts
+### Browsing & managing posts
 
 | Tool                  | Arguments                                  | Notes                                                                 |
 | --------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| `publer_list_posts`   | `state?`, `states?`, `from?`, `to?`, `page?`, `account_ids?`, `query?`, `post_type?`, `member_id?`, `workspace_id?` | List/filter posts (paginated). Use to find post IDs.                  |
+| `publer_list_media`   | `ids?`, `types?`, `used?`, `source?`, `page?`, `search?`, `workspace_id?` | List the media library; returns ids usable in posts.                 |
 | `publer_update_post`  | `post_id`, `post` (`{text, …}`), `workspace_id?` | `PUT /posts/{id}`. Published posts allow only network-specific fields. |
 | `publer_delete_posts` | `post_ids` (string[]), `workspace_id?`      | **Irreversible.** Subject to Publer's role/state rules.               |
 
@@ -220,10 +224,21 @@ returns `{ data: { job_id } }` — poll `publer_check_job_status` until done.
 
 ### Jobs & analytics
 
-| Tool                       | Arguments                                                                                                   | Notes                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `publer_check_job_status`  | `job_id`, `workspace_id?`                                                                                    | Poll posts / URL-media-upload jobs until `status: completed`.  |
-| `publer_get_post_insights` | `account_id`, `from?`, `to?`, `post_type?`, `query?`, `labels?`, `sort?`, `page?`, `competitors?`, `competitor_id?`, `workspace_id?` | Per-post analytics with filtering, sorting, pagination.        |
+`account_id` is optional on the analytics tools — omit it to aggregate
+across all accessible accounts.
+
+| Tool                                 | Arguments                                                                                                   | Notes                                                          |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `publer_check_job_status`            | `job_id`, `workspace_id?`                                                                                    | Poll posts / URL-media-upload jobs until `status: completed`.  |
+| `publer_get_post_insights`           | `account_id?`, `from`, `to`, `post_type?`, `query?`, `sort_by?`, `sort_type?`, `page?`, `member_id?`, `competitors?`, `competitor_id?`, `workspace_id?` | Per-post analytics, filtering/sorting/pagination.              |
+| `publer_list_charts`                 | `account_type?`, `workspace_id?`                                                                            | Available charts (growth/insights/demographics).               |
+| `publer_get_chart_data`              | `chart_ids`, `account_id?`, `from?`, `to?`, `workspace_id?`                                                 | Time-series chart data (current vs previous period).           |
+| `publer_get_hashtag_insights`        | `account_id?`, `from?`, `to?`, `sort_by?`, `sort_type?`, `page?`, `query?`, `member_id?`, `workspace_id?`   | Aggregated hashtag analytics + score.                          |
+| `publer_get_hashtag_performing_posts`| `hashtag`, `account_id?`, `from?`, `to?`, `sort_by?`, `sort_type?`, `member_id?`, `query?`, `workspace_id?` | Top posts for a hashtag.                                       |
+| `publer_get_best_times`              | `account_id?`, `from`, `to`, `competitors?`, `competitor_id?`, `workspace_id?`                              | Day/hour posting heatmap.                                      |
+| `publer_get_members_analytics`       | `from`, `to`, `account_id?`, `workspace_id?`                                                                | Per-member posting/engagement.                                 |
+| `publer_list_competitors`            | `account_id?`, `workspace_id?`                                                                              | Competitor accounts.                                           |
+| `publer_get_competitor_analytics`    | `account_id?`, `competitor_id?`, `query?`, `from?`, `to?`, `page?`, `sort_by?`, `sort_type?`, `workspace_id?` | Competitor benchmarking analytics.                             |
 
 ---
 
