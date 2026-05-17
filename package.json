@@ -1,0 +1,37 @@
+{
+  "name": "publer-mcp-server",
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for the Publer social media management API",
+  "type": "module",
+  "bin": {
+    "publer-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "publer",
+    "social-media"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
