@@ -194,12 +194,33 @@ export function createServer(): McpServer {
         auto: z
           .boolean()
           .optional()
-          .describe("Enable AI auto-scheduling. Provide range with this."),
+          .describe(
+            "Enable AI auto-scheduling: Publer picks the optimal time " +
+              "within range. Provide range with this.",
+          ),
         range: z
-          .record(z.string(), z.any())
+          .object({
+            start_date: z
+              .string()
+              .describe(
+                "Earliest ISO 8601 timestamp for posting (inclusive).",
+              ),
+            end_date: z
+              .string()
+              .optional()
+              .describe(
+                "Latest ISO 8601 timestamp (inclusive). Omit when using " +
+                  "share_next for the next available slot.",
+              ),
+          })
+          .optional()
+          .describe("Auto-schedule window. Required when auto is true."),
+        share_next: z
+          .boolean()
           .optional()
           .describe(
-            "Auto-schedule window: { start_date, end_date } ISO timestamps.",
+            "Auto-scheduling: schedule in the very next available slot " +
+              "(use with auto and a range that has only start_date).",
           ),
         recycling: z
           .record(z.string(), z.any())
@@ -229,6 +250,7 @@ export function createServer(): McpServer {
       state,
       auto,
       range,
+      share_next,
       recycling,
       recurring,
       networks,
@@ -247,6 +269,7 @@ export function createServer(): McpServer {
             labels,
             auto,
             range,
+            shareNext: share_next,
             recycling,
             recurring,
             networks,

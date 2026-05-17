@@ -51,6 +51,8 @@ export interface SimplePostInput {
   /** Post-level publishing options passed straight through. */
   auto?: boolean;
   range?: Record<string, unknown>;
+  /** Auto-scheduling: schedule in the very next available slot. */
+  shareNext?: boolean;
   recycling?: Record<string, unknown>;
   recurring?: Record<string, unknown>;
 }
@@ -258,6 +260,7 @@ export class PublerClient {
     };
     if (input.auto !== undefined) post.auto = input.auto;
     if (input.range) post.range = input.range;
+    if (input.shareNext !== undefined) post.share_next = input.shareNext;
     if (input.recycling) post.recycling = input.recycling;
     if (input.recurring) post.recurring = input.recurring;
 
