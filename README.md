@@ -1,8 +1,9 @@
 # Publer MCP Server
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that
-exposes the [Publer](https://publer.com) social media management API as tools
-for MCP clients such as Claude Desktop, Claude Code, and the Claude Agent SDK.
+exposes the [Publer](https://publer.com/Hynca) social media management API as
+tools for MCP clients such as Claude Desktop, Claude Code, and the Claude Agent
+SDK. That Publer link is an affiliate link.
 
 It covers accounts/workspaces, the full Posts Create surface (every documented
 content type and platform format), post/media listing, post update/delete,
@@ -561,4 +562,4 @@ publer-mcp-server/
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
